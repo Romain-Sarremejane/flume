@@ -35,14 +35,21 @@ plot.flume = function(x, variable = c("occupancy", "resources"), type = c("netwo
 
 
 #' Plot a river network
-#' @details The argument 'variable' can either be a column number from the state variable matrix, a column name from
-#' the state variable matrix, or the special name "site_by_species", which produces a plot of the network with
-#' species presence-absence.
+#' @details The argument 'variable' can either be a column number from the state variable matrix, 
+#' a column name from the state variable matrix, or the special name "species", which produces a 
+#' plot of the network with species presence-absence.
 #' @param x A [river_network()]
 #' @param variable If state is defined, the column to use for plotting; see 'details'
 #' @param t Optional, time step to print; if missing, defaults to most recent
 #' @param zlim Optional, z limits for colour scales when plotting a state variable
 #' @param ... Additional arguments to [igraph::plot.igraph()]
+#' @examples
+#' Q = rep(1, 4)
+#' adj = matrix(0, nrow = 4, ncol = 4)
+#' adj[1,2] = adj[2,3] = adj[4,3] = 1
+#' rn = river_network(adj, Q)
+#' plot(rn)
+#' plot.river_network(rn)
 #' @export
 plot.river_network = function(x, variable = 1, t, zlim, ...) {
 	if(!requireNamespace("igraph", quietly = TRUE)) {
@@ -68,15 +75,18 @@ plot.river_network = function(x, variable = 1, t, zlim, ...) {
 
 	## colour scale, if available and desired
 	if(variable == "site_by_species") {
+		warning("variable = 'site_by_species' is deprecated, use variable = 'species' instead.")
+		variable = "species"
+	}
+	if(variable == "species") {
 		if(missing(t)) {
-			S = site_by_species(x)
+			S = state(x, "species")
 		} else {
-			S = site_by_species(x, TRUE)[[t]]
+			S = state(x, "species", TRUE)[[t]]
 		}
 		nsp = ncol(S)
 		# colours from colorbrewer
 		cols = c("#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6")
-		args$vertex.label.color = '#444444'
 
 		par(mfrow = .set_mfrow(nsp))
 		for(i in 1:nsp) {
@@ -86,16 +96,18 @@ plot.river_network = function(x, variable = 1, t, zlim, ...) {
 		}
 	}
 	else {
-		if(!is.null(state(x)) && !("vertex.color" %in% names(args)) && requireNamespace("scales", quietly = TRUE)) {
+		if(!is.null(state(x, "resources")) && 
+					!("vertex.color" %in% names(args)) && 
+					requireNamespace("scales", quietly = TRUE)) {
 			if(missing(t)) {
-				R = state(x)[,variable]
+				R = state(x, "resources")[,variable]
 			} else {
-				R = state(x, TRUE)[[t]][,variable]
+				R = state(x, "resources", history = TRUE)[[t]][,variable]
 			}
 			if(missing(zlim))
 				zlim = range(R)
 			args$vertex.color = scales::col_numeric("PuBu", zlim)(R)
-			args$vertex.label.color = rev(scales::col_numeric("YlOrBr", zlim)(R))
+			
 		} else {
 			if(!requireNamespace("scales", quietly = TRUE))
 				message("Install the scales package for plotting the state variable with a colour scale")
@@ -203,6 +215,7 @@ plot.species = function(x, R, axis = 1, res = 100, lwd = 1) {
 	if(!"edge.width" %in% nms) dots$edge.width = 10
 	if(!"edge.color" %in% nms) dots$edge.color = "#a6bddb"
 	if(!"edge.arrow.size" %in% nms) dots$edge.arrow.size = 0.1 * dots$edge.width
+	if(!"vertex.label.color" %in% nms) dots$vertex.label.color ="#444444"
 	return(dots)
 }
 

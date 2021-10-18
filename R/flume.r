@@ -23,42 +23,66 @@
 #' data(algae)
 #' model = flume(algae$metacommunity, algae$network, algae$sp0, algae$r0)
 #' @export
-flume = function(comm, network, sp0, st0, spb, stb, dt = 1) {
+flume = function(comm, network, sp0, st0, spb, stb, dt = 86400) {
 
-	## define initial states, and check dimensionality
-	if(is.null(state(network)) && missing(st0))
-		stop("Initial resource state not specified")
+	# if(missing(st0)) {
+	# 	if(is.null(state(network, "resources")))
+	# 		stop("Initial resource state not specified")
+	# 	st0 = state(network)
+	# }
+	# if(ncol(st0) != attr(comm, "n_r"))
+	# 	stop("Initial network state doesn't match number of resources in comm")
+	# colnames(st0) = attr(comm, "r_names")
+	# state(network, "resources") <- NULL
+	# state(network, "resources") <- st0
+	## initial state for species
+	# if(missing(sp0)) {
+	# 	if(is.null(state(network, "species")))
+	# 		stop("Initial site by species matrix not specified")
+	# 	sp0 = state(network, "species")
+	# }		
+	# 	if(ncol(sp0) != attr(comm, "n_species"))
+	# 	stop("Initial site by species doesn't match number of species in comm")
+	# colnames(sp0) = attr(comm, "sp_names")
+	# state(network, "species") <- NULL
+	# state(network, "species") <- sp0
 
-	if(is.null(network[["si_by_sp"]]) && missing(sp0))
-		stop("Initial site by species matrix not specified")
+	## define initial states and check dimensionality
+	network = .set_flume_initial_state(network, comm, st0, "resources")
+	network = .set_flume_initial_state(network, comm, sp0, "species")
 
-	if(missing(st0))
-		st0 = state(network)
-	if(ncol(st0) != attr(comm, "n_r"))
-		stop("Initial network state doesn't match number of resources in comm")
-	colnames(st0) = attr(comm, "r_names")
-	network = reset_state(network, st0)
+	# set resource boundary conditions
 	if(missing(stb))
-		stb = state(network)
-
+		stb = state(network, "resources")
 	i_static = which(attr(comm, "r_types") == "static")
 	if(length(i_static) > 0) {
 		stb[i_static] = 0
 	}
+	boundary(network, "resources") = stb
 
-	boundary(network) = stb
-	if(missing(sp0))
-		sp0 = site_by_species(network)
-	if(ncol(sp0) != attr(comm, "n_species"))
-		stop("Initial site by species doesn't match number of resources in comm")
-	colnames(sp0) = attr(comm, "sp_names")
-	network = reset_species(network, sp0)
 	if(missing(spb))
-		spb = matrix(0, nrow = attr(network, 'n_sites'), ncol = attr(comm, 'n_species'), 
-			dimnames = list(attr(network, "site_names"), attr(comm, "sp_names")))
-	boundary_species(network) = spb
+		spb = state(network, "species") * 0
+	boundary(network, "species") = spb
 	x = structure(list(metacom = comm, networks = list(network), dt = dt), class = "flume")
 	x
+}
+
+.set_flume_initial_state = function(rn, comm, init, type = c("resources", "species")) {
+	type = match.arg(type)
+	n = ifelse(type == "resources", "n_r", "n_species")
+	nm = ifelse(type == "resources", "r_names", "sp_names")
+
+	if(missing(init)) {
+		if(is.null(state(rn, type)))
+			stop("Initial ", type, " state not specified")
+		init = state(rn, type)
+	}
+	if(ncol(init) != attr(comm, n))
+		stop("Initial network state doesn't match number of ", type, " in comm")
+	colnames(init) = attr(comm, nm)
+	state(rn, type) <- NULL
+	state(rn, type) <- init
+	rn
 }
 
 #' Compute post simulation statistics
@@ -90,17 +114,15 @@ resource_summary = function(x) {
 .reshape_sim = function(x, variable = c("species", "resources")) {
 	variable = match.arg(variable)
 	if(variable == "species") {
-		fun = site_by_species
 		variable.name = "species"
 		value.name = "occupancy"
 	} else {
-		fun = state
 		variable.name = "resource"
 		value.name = "concentration"
 	}
 	cores = ifelse(.Platform$OS.type == "unix", parallel::detectCores(), 1)
 	data.table::rbindlist(parallel::mclapply(x[["networks"]], function(r) {
-		S = fun(r, history = TRUE)
+		S = state(r, variable, history = TRUE)
 		res = data.table::rbindlist(lapply(S, function(s) {
 			val = data.table::data.table(s)
 			val$reach = seq_len(nrow(val))
@@ -121,14 +143,32 @@ resource_summary = function(x) {
 #' then returns a copy of `x` with the updated state and state history.
 #'
 #' @param x A [flume()] object
-#' @param nt The number of time steps
+#' @param nt The number of outer time steps, see 'details'
+#' @param nt_i The number of inner/integration time steps, see 'details'
 #' @param reps The number of replicate simulations to run; by default a single sim is run
 #' on a new flume; for continuing simulations, the same number of replicates will be used
+#' @details Flume runs at two different time scales to account for the fact that community changes
+#' are often slower than resource transport. Thus we have two different parameters here (along
+#' with the `dt` parameter from the [flume()] function) for specifying the length of time to run 
+#' the model:
+#'
+#' * `nt` Controls the "outer" time step; this is the number of times the model will simulate
+#' colonisations and extinctions, and the number of time steps that will be reported in model 
+#' output.
+#' * `nt_i` Defines the number of inner time steps for each outer time step; this controls the
+#' temporal resolution at which the integration for the transport/reaction model is run.
+#' * `dt` (Not specified here, but in the [flume()] function) Determines the length of each outer
+#' time step; units are the same units as discharge and other fluxes.
+#'
+#' For example, if discharge is in m^3/s, then the default `dt = 86400` corresponds to an outer
+#' time step of 86400 seconds, or one day. Setting nt = 100 will run the model for 100 days, and 
+#' setting nt_i = 144 will integrate resource transport and reaction 144 times each day, 
+#' corresponding to a 10-minute temporal resolution.
 #' @return A modified copy of `x`, with state updated with the results of the simulation.
 #' @export
-run_simulation = function(x, nt, reps, parallel = TRUE, cores = parallel::detectCores()) {
+run_simulation = function(x, nt, nt_i=1, reps, parallel = TRUE, cores = parallel::detectCores()) {
 
-	if(nt < 1)
+	if(nt < 1 || nt_i < 1)
 		stop("at least one time step is required")
 
 	if(missing(reps))
@@ -148,10 +188,10 @@ run_simulation = function(x, nt, reps, parallel = TRUE, cores = parallel::detect
 
 	if(parallel && reps > 1 && cores > 1) {
 		x[["networks"]] = parallel::mclapply(x[["networks"]], .do_sim, comm = x[["metacom"]], 
-			dt = x[["dt"]], nt = nt, mc.cores = cores)
+			dt = x[["dt"]], nt = nt, nt_i = nt_i, mc.cores = cores)
 	} else {
 		x[["networks"]] = lapply(x[["networks"]], .do_sim, comm = x[["metacom"]], dt = x[["dt"]], 
-			nt = nt)
+			nt = nt, nt_i = nt_i)
 	}
 
 	return(x)
@@ -161,18 +201,30 @@ run_simulation = function(x, nt, reps, parallel = TRUE, cores = parallel::detect
 #' Worker function for running simulations in parallel
 #' @param network A river network
 #' @param comm A metacommunity
-#' @param dt The size of the time step
-#' @param nt The number of time steps
+#' @param dt The size of the (outer) time step; one "generation" for the metacommunity
+#' @param nt The number of outer time steps
+#' @param nt_i The number of inner time steps
 #' @return A modified copy of `network` with the results of the simulation
 #' @keywords internal
-.do_sim = function(network, comm, dt, nt) {
-	R = state(network)
-	S = site_by_species(network)
+.do_sim = function(network, comm, dt, nt, nt_i) {
+	R = state(network, "resources")
+	S = state(network, "species")
 
-	for(tstep in 1:nt) {
+	dt_i = dt/nt_i
+	for(t_out in 1:nt) {
 		cp = col_prob(comm, network, dt = dt)
 		ep = ext_prob(comm, network, dt = dt)
-		dR = dRdt(comm, network)
+
+		# transport-reaction terms for each site/resource, in concentration units
+		rxn_t = transport_t = 0 * R
+		for(t_in in 1:nt_i) {
+			dR_comp = dRdt(comm, network, components = TRUE)
+			dR = dR_comp$reaction - dR_comp$transport
+			rxn_t = rxn_t + dR_comp$reaction * dt_i
+			transport_t = transport_t + dR_comp$transport * dt_i
+			## euler integration for now
+			R = R + dR * dt_i
+		}
 
 		# no cols where already present, no exts where already absent
 		cp[S == 1] = 0
@@ -182,11 +234,11 @@ run_simulation = function(x, nt, reps, parallel = TRUE, cores = parallel::detect
 		S[cols == 1] = 1
 		S[exts == 1] = 0
 
-		## euler integration for now
-		R = R + dR * dt
-
-		site_by_species(network) = S
-		state(network) = R
+		# currently we update state only at the end of each outer time step
+		state(network, "species") = S
+		state(network, "resources") = R
+		state(network, "reaction") = rxn_t
+		state(network, "transport") = transport_t
 	}
 	return(network)
 }
