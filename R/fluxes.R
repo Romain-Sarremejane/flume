@@ -48,28 +48,39 @@ col_prob = function(comm, network, dt, components = FALSE) {
 #' @rdname ceprob
 #' @export
 ext_prob = function(comm, network, dt, components = FALSE) {
-	S = state(network, "species")
-	R = state(network, "resources")
-
-	# extinction rate has two components, the stochastic extinction rate and the competition portion
-	# stochastic first
-	m_i = f_niche(comm, R = R, component = "ext")
-
-	# competition, which is the sum of the competitive effects of species present in each site
-	m_ij = comm$competition ## species by species competition matrix
-	comp = S %*% m_ij * S ## this is witchcraft
-
-	dimnames(m_i) = dimnames(comp) = dimnames(S)
-	if(components) {
-		return(list(stochastic = m_i, competition = comp))
-	} else {
-		res = 1 - exp(-1 * (m_i + comp) * dt)
-		dimnames(res) = dimnames(S)
-		return(res)
-	}
-
+  S = state(network, "species")
+  R = state(network, "resources")
+  Q = state(network, "Q") 
+  
+  # extinction rate has two components, the stochastic extinction rate and the competition portion
+  # stochastic first
+  m_i = f_niche(comm, R = R, component = "ext")
+  
+  # competition, which is the sum of the competitive effects of species present in each site
+  m_ij = comm$competition ## species by species competition matrix
+  comp = S %*% m_ij * S ## this is witchcraft
+  
+  # adding a resistance to drying term
+  Rt = res_params(comm)$resist
+  Rtmat = S
+  Rtmat[which(Q>0.001),] = 0
+  Rtmat[which(Q<=0.001),] = Rt[]
+  
+  dimnames(m_i) = dimnames(comp) = dimnames(S)
+  if(components) {
+    return(list(stochastic = m_i, competition = comp))
+  } else {
+    res = 1 - exp(-1 * (m_i + comp + Rtmat) * dt)
+    #if(any(res>1)) {
+    #res[which(res>1)] = 1 
+    #} else {
+    #res = res
+    #}
+    dimnames(res) = dimnames(S)
+    return(res)
+  }
+  
 }
-
 
 #' Prepare parameter list for dRdt
 #' @param C a metacommunity

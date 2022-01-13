@@ -200,6 +200,25 @@ dispersal_custom = function(nsp, alpha = 0.05, beta = 0.5) {
 	list(alpha = alpha, beta = beta)
 }
 
+#' @rdname resist
+#' @name resist
+#' @title Generate scenarios for species' resistance to drying abilities
+#' @param nsp Number of species
+#' @param resist A vector, resistance capacity of each species; warning: higher values indicate high sensitivity to drying
+# by default resist values are set to 0, meaning tha species are insensitive to drying (Q<0.001)
+#' @examples
+#' resistance_custom(nsp = 3)
+#' @export
+
+resistance_custom = function(nsp, resist=0) {
+  if(length(resist) == 1)
+    resist = rep(0, nsp)
+  if(length(resist) != nsp)
+    stop("length(resist) must be 1 or the number of species")
+  list(resist = resist)
+}
+
+
 
 #' @rdname community_scenarios
 #' @name community_scenarios

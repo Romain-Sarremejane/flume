@@ -5,11 +5,12 @@
 #' @param r_names A vector of resource names
 #' @param niche_args A list of named arguments to be passed to the niche function
 #' @param dispersal_args A list of named arguments to be passed to the dispersal function
-#' @param comp_scale Scale for the strength of competition, see 'details'. 
+#' @param comp_scale Scale for the strength of competition, see 'details'.
+#' @param resist_args A list of named arguments to be passed to the resist function
 #' @details The metacommunity describes the possible biological space for a `flume` model. It
 #' consists of a few named elements:
-#' * `species`: a list of [species()] objects, describing the niche and dispersal parameters
-#' for each possible species
+#' * `species`: a list of [species()] objects, describing the niche, dispersal and resistance to drying parameters
+#' for each possible species; High "resistance to drying" is indicate by low values; whereas higher values indicate high sensitivity to drying.
 #' * `competition`: A square species interaction matrix describing the effect of each species
 #' on each other species; generated using the overlap between species'
 #' [fundamental niches](f_niche.species()).
@@ -38,6 +39,7 @@
 #' \donttest{
 #'		# defaults
 #'		mc = metacommunity()
+#'		
 #'
 #'		# multiple species
 #'		mc = metacommunity(location = c(1, 2))
@@ -53,67 +55,72 @@
 #'		mc = metacommunity(location = loc, breadth = bre, niche_lim = nlim)
 #' }
 #' @export
-metacommunity = function(nsp = 2, nr = 1, niches = niches_uniform, dispersal = dispersal_custom,
-			sp_names = paste0("sp", 1:nsp), r_names = paste0("r", 1:nr), niche_args = list(),
-			dispersal_args = list(), comp_scale = 1/nsp) {
-	comm = structure(list(), class = "metacommunity")
-	## niche parameters
-	niche_args$nsp = nsp
-	niche_args$nr = nr
-	n_params = do.call(niches, niche_args)
 
-	## dispersal params
-	dispersal_args$nsp = nsp
-	d_params = do.call(dispersal, dispersal_args)
-	## create a list of species
-	comm[["species"]] = mapply(species, location = n_params$location, breadth = n_params$breadth,
-		scale_c = n_params$scale_c, scale_e = n_params$scale_e, r_use = n_params$r_use,
-		alpha = d_params$alpha, beta = d_params$beta, MoreArgs = list(r_trans = n_params$r_trans), 
-		SIMPLIFY = FALSE)
-	attr(comm, "sp_names") = sp_names
-	attr(comm, "r_names") = r_names
-	attr(comm, "r_lim") = n_params$r_lim
-	attr(comm, "r_types") = n_params$r_types
-	attr(comm, "r_ratio") = n_params$ratio
-	attr(comm, "n_species") = nsp
-	attr(comm, "n_resources") = nr
-
-	if("ratio" %in% attr(comm, "r_types")) {
-		nn = nr - nrow(n_params$ratio)
-		attr(comm, "niche_types") = "normal"
-		i_r = (nn - nrow(n_params$ratio) + 1):nn  # ratio indices always go on the end
-		attr(comm, "niche_types")[i_r] = "ratio"
-		n_names_ratio = apply(matrix(r_names[n_params$ratio], ncol=2), 1, 
-			function(x) paste(x, collapse=":"))
-		if(length(i_r) < nn) {
-			i_nr = 1:(nn - nrow(n_params$ratio)) # non-ratio incides
-			attr(comm, "niche_names") = c(r_names[i_nr], n_names_ratio)
-		} else
-			attr(comm, "niche_names") = n_names_ratio
-	} else {
-		attr(comm, "niche_names") = r_names
-		attr(comm, "niche_types") = attr(comm, "r_types")
-	}
-
-	## compute reasonable niche limits for plotting and integration
-	## this is done rather simply by looking for +/- 2 sds beyond any niche location
-	nlocs = niche_par(comm, "location")
-	nsds = niche_par(comm, "sd")
-	nmins = nlocs - 2 * nsds
-	nmaxes = nlocs + 2 * nsds
-
-	# niches/resources have a natural limit of zero
-	# note that this means that all habitat variables MUST be on a ratio scale
-	# for example, do not use temperature in C, use K
-	nmins[nmins < 0] = 0
-	attr(comm, "niche_lim") = cbind(apply(nmins, 2, min), apply(nmaxes, 2, max))
-	attr(comm, "niche_lims") = list(min = nmins, max = nmaxes)
-
-	comm[["competition"]] = .compute_comp_matrix(comm, comp_scale)
-
-	## for now no immigration from outside the metacommunity
-	comm[["boundary"]] = function(n=1) matrix(0, nrow = n, ncol = nsp)
-	comm
+metacommunity = function(nsp = 2, nr = 1, niches = niches_uniform, dispersal = dispersal_custom, resist = resistance_custom,
+                         sp_names = paste0("sp", 1:nsp), r_names = paste0("r", 1:nr), niche_args = list(),
+                         dispersal_args = list(), comp_scale = 1/nsp, resist_args = list()) {
+  comm = structure(list(), class = "metacommunity")
+  ## niche parameters
+  niche_args$nsp = nsp
+  niche_args$nr = nr
+  n_params = do.call(niches, niche_args)
+  
+  #resistance parameter
+  resist_args$nsp=nsp
+  res_params = do.call(resist, resist_args)
+  
+  ## dispersal params
+  dispersal_args$nsp = nsp
+  d_params = do.call(dispersal, dispersal_args)
+  ## create a list of species
+  comm[["species"]] = mapply(species, location = n_params$location, breadth = n_params$breadth,
+                             scale_c = n_params$scale_c, scale_e = n_params$scale_e, r_use = n_params$r_use,
+                             alpha = d_params$alpha, beta = d_params$beta, resist = res_params$resist, MoreArgs = list(r_trans = n_params$r_trans), 
+                             SIMPLIFY = FALSE)
+  attr(comm, "sp_names") = sp_names
+  attr(comm, "r_names") = r_names
+  attr(comm, "r_lim") = n_params$r_lim
+  attr(comm, "r_types") = n_params$r_types
+  attr(comm, "r_ratio") = n_params$ratio
+  attr(comm, "n_species") = nsp
+  attr(comm, "n_resources") = nr
+  
+  if("ratio" %in% attr(comm, "r_types")) {
+    nn = nr - nrow(n_params$ratio)
+    attr(comm, "niche_types") = "normal"
+    i_r = (nn - nrow(n_params$ratio) + 1):nn  # ratio indices always go on the end
+    attr(comm, "niche_types")[i_r] = "ratio"
+    n_names_ratio = apply(matrix(r_names[n_params$ratio], ncol=2), 1, 
+                          function(x) paste(x, collapse=":"))
+    if(length(i_r) < nn) {
+      i_nr = 1:(nn - nrow(n_params$ratio)) # non-ratio incides
+      attr(comm, "niche_names") = c(r_names[i_nr], n_names_ratio)
+    } else
+      attr(comm, "niche_names") = n_names_ratio
+  } else {
+    attr(comm, "niche_names") = r_names
+    attr(comm, "niche_types") = attr(comm, "r_types")
+  }
+  
+  ## compute reasonable niche limits for plotting and integration
+  ## this is done rather simply by looking for +/- 2 sds beyond any niche location
+  nlocs = niche_par(comm, "location")
+  nsds = niche_par(comm, "sd")
+  nmins = nlocs - 2 * nsds
+  nmaxes = nlocs + 2 * nsds
+  
+  # niches/resources have a natural limit of zero
+  # note that this means that all habitat variables MUST be on a ratio scale
+  # for example, do not use temperature in C, use K
+  nmins[nmins < 0] = 0
+  attr(comm, "niche_lim") = cbind(apply(nmins, 2, min), apply(nmaxes, 2, max))
+  attr(comm, "niche_lims") = list(min = nmins, max = nmaxes)
+  
+  comm[["competition"]] = .compute_comp_matrix(comm, comp_scale)
+  
+  ## for now no immigration from outside the metacommunity
+  comm[["boundary"]] = function(n=1) matrix(0, nrow = n, ncol = nsp)
+  comm
 }
 
 
@@ -127,10 +134,24 @@ metacommunity = function(nsp = 2, nr = 1, niches = niches_uniform, dispersal = d
 #' comm = community()
 #' dispersal_params(comm)
 dispersal_params = function(x) {
-	alpha = sapply(x$species, function(y) y$alpha)
-	beta = sapply(x$species, function(y) y$beta)
-	list(alpha = alpha, beta = beta)
+  alpha = sapply(x$species, function(y) y$alpha)
+  beta = sapply(x$species, function(y) y$beta)
+  list(alpha = alpha, beta = beta)
 }
+
+#' Returns "resistance to drying" parameters for a metacommunity
+#' @param x A [metacommunity()]
+#' @return Named list with one elements, `resist` 
+#' @export
+#' @examples
+#' comm = community()
+#' res_params(comm)
+
+res_params = function(x) {
+  resist = sapply(x$species, function(y) y$resist)
+  list(resist = resist)
+}
+
 
 #' Creates species
 #'
@@ -167,22 +188,83 @@ dispersal_params = function(x) {
 #'    * `niche_max`: the maximum possible value of the fundamental niche
 #' @examples NULL
 #' @export
-species = function(location, breadth, scale_c, scale_e, alpha, beta, r_use, r_trans = identity) {
-	x = structure(list(), class = "species")
-	x$par_c = list(location = location, breadth = breadth, scale = scale_c)
-	x$par_e = list(scale = scale_e)
-	x$alpha = alpha
-	x$beta = beta
-	if(length(r_use) == 1)
-		r_use = rep(r_use, length(location))
-	x$r_use = r_use
-	.check_species_params(x)
-	x$r_trans = r_trans
-	x$col = ce_gaussian(location, breadth, scale_c)
-	x$ext = ce_constant(scale_e, length(location))
+species = function(location, breadth, scale_c, scale_e, alpha, beta, resist, r_use, r_trans = identity) {
+  x = structure(list(), class = "species")
+  x$par_c = list(location = location, breadth = breadth, scale = scale_c)
+  x$par_e = list(scale = scale_e)
+  x$alpha = alpha
+  x$beta = beta
+  x$resist = resist
+  if(length(r_use) == 1)
+    r_use = rep(r_use, length(location))
+  x$r_use = r_use
+  .check_species_params(x)
+  x$r_trans = r_trans
+  x$col = ce_gaussian(location, breadth, scale_c)
+  x$ext = ce_constant(scale_e, length(location))
+  
+  attr(x, "niche_max") = f_niche(x, N = location)
+  return(x)
+}
 
-	attr(x, "niche_max") = f_niche(x, N = location)
-	return(x)
+#' Make a competition matrix
+#' @param x A [metacommunity()]
+#' @param comp_scale The competition scale
+#' @keywords internal
+#' @return a matrix giving pairwise competition coefficients
+.compute_comp_matrix = function(x, comp_scale) {
+  nsp = attr(x, "n_species")
+  
+  if(length(comp_scale) == 1) {
+    comp_scale = matrix(comp_scale, nrow=nsp, ncol = nsp)
+  }
+  if(length(comp_scale) == nsp) {
+    comp_scale = matrix(comp_scale, nrow = nsp, ncol = nsp)
+  }
+  if(!is.matrix(comp_scale) || nrow(comp_scale) != nsp || ncol(comp_scale) != nsp)
+    stop("comp_scale must be missing, a single value, a vector of length nsp,", 
+         "or an nsp by nsp matrix")
+  
+  sp = x[["species"]]
+  xmin = attr(x, "niche_lims")$min
+  xmax = attr(x, "niche_lims")$max
+  if(ncol(xmin) == 1) {
+    integration_fun = integrate
+    integral_name = "value"
+  } else {
+    if(!requireNamespace("cubature", quietly = TRUE))
+      stop("Multidimensional niches require the 'mvtnorm' and 'cubature' packages")
+    integral_name = "integral"
+    if(length(xmin) < 4) {
+      integration_fun = cubature::pcubature
+    } else {
+      integration_fun = cubature::hcubature
+    }
+    
+  }
+  ## guard against case when there is only one species
+  if(length(sp) == 1) {
+    comp = matrix(integration_fun(.pairwise_comp(sp[[1]], sp[[1]]), 
+                                  xmin[1,], xmax[1,])[[integral_name]], nrow = 1, ncol = 1)
+  } else {
+    comp = matrix(0., nrow = length(sp), ncol = length(sp))
+    for(i in seq_len(length(sp) - 1)) {
+      si = sp[[i]]
+      comp[i, i] = integration_fun(.pairwise_comp(si, si), xmin[i,], xmax[i,])[[integral_name]]
+      for(j in (i + 1):length(sp)) {
+        # need to help the integrator with reasonable limits
+        # the only part that matters is the largest niche min and the smallest niche max
+        xmn = pmax(xmin[i,], xmin[j,])
+        xma = pmin(xmax[i,], xmax[j,])
+        sj = sp[[j]]
+        comp[i, j] = integration_fun(.pairwise_comp(si, sj), xmn, xma)[[integral_name]]
+        comp[j, i] = comp[i, j]
+      }
+    }
+    comp[j, j] = integration_fun(.pairwise_comp(sj, sj), xmin[j,], xmax[j,])[[integral_name]]
+  }
+  rownames(comp) = colnames(comp) = attr(x, "spnames")
+  return(comp * comp_scale)
 }
 
 #' Make a competition matrix
